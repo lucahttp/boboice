@@ -1,0 +1,101 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:buddy_engine/buddy_engine.dart';
+import 'services/onnx_audio_manager.dart';
+import 'ui/conversation_screen.dart';
+
+void main() { runApp(const BuddyApp()); }
+
+class BuddyApp extends StatefulWidget {
+  const BuddyApp({super.key});
+  @override
+  State<BuddyApp> createState() => _BuddyAppState();
+}
+
+class _BuddyAppState extends State<BuddyApp> {
+  late final VoiceAgent _agent;
+  final Personality _personality = Personality();
+  final ToolRegistry _toolRegistry = ToolRegistry();
+  late final AbortSignal _abortSignal;
+  OnnxAudioManager? _audioManager;
+
+  @override
+  void initState() {
+    super.initState();
+    _abortSignal = AbortSignal();
+
+    final llm = OpenAiProvider(
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: const String.fromEnvironment('OPENAI_API_KEY'),
+      defaultModel: 'gpt-4o',
+    );
+
+    _toolRegistry.registerAll(createBuiltinTools(
+      onSetPersonality: (dial, value) => setState(() => _personality.set(dial, value)),
+      availableSkills: const [],
+    ));
+
+    _agent = VoiceAgent(
+      llm: llm,
+      toolRegistry: _toolRegistry,
+      personality: _personality,
+      abortSignal: _abortSignal,
+    );
+    _agent.initialize();
+    _initAudio();
+  }
+
+  Future<void> _initAudio() async {
+    _audioManager = OnnxAudioManager();
+    _audioManager!.onWakeWord = (word) {
+      debugPrint('Wake word: $word');
+      _agent.enqueue(word);
+    };
+    _audioManager!.onTranscription = (text) {
+      debugPrint('Transcribed: $text');
+      _agent.enqueue(text);
+    };
+    _audioManager!.onVadState = (speaking) {
+      // Could update UI or trigger TTS interruption here
+    };
+
+    final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';
+
+    try {
+      await _audioManager!.initialize(
+        melSpectrogramPath: '$modelsDir\\mel-spectrogram.onnx',
+        speechEmbeddingPath: '$modelsDir\\speech-embedding.onnx',
+        wakeWordPath: '$modelsDir\\hey-buddy.onnx',
+        vadModelPath: '$modelsDir\\silero-vad.onnx',
+        asrModelPath: '$modelsDir\\encoder.onnx',
+        tokensPath: '$modelsDir\\tokens.txt',
+      );
+      await _audioManager!.start();
+    } catch (e) {
+      debugPrint('Audio init failed: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _abortSignal.abort();
+    _audioManager?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Buddy',
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.cyan, brightness: Brightness.dark),
+      ),
+      home: ConversationScreen(
+        agent: _agent,
+        personality: _personality,
+        audioStateStream: _audioManager?.stateStream,
+        speechProbabilityStream: _audioManager?.speechProbabilityStream,
+      ),
+    );
+  }
+}
