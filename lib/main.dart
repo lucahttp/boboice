@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:buddy_engine/buddy_engine.dart';
+import 'services/audio_player_service.dart';
 import 'services/onnx_audio_manager.dart';
 import 'ui/conversation_screen.dart';
 
@@ -17,6 +18,7 @@ class _BuddyAppState extends State<BuddyApp> {
   final Personality _personality = Personality();
   final ToolRegistry _toolRegistry = ToolRegistry();
   late final AbortSignal _abortSignal;
+  final AudioPlayerService _audioPlayer = AudioPlayerService();
   OnnxAudioManager? _audioManager;
 
   @override
@@ -24,10 +26,12 @@ class _BuddyAppState extends State<BuddyApp> {
     super.initState();
     _abortSignal = AbortSignal();
 
+    // MiniMax LLM via OpenAI-compatible API
     final llm = OpenAiProvider(
-      baseUrl: 'https://api.openai.com/v1',
-      apiKey: const String.fromEnvironment('OPENAI_API_KEY'),
-      defaultModel: 'gpt-4o',
+      baseUrl: 'https://api.minimax.io/v1',
+      apiKey: const String.fromEnvironment('MINIMAX_API_KEY',
+          defaultValue: 'sk-cp-0KeOTVpfnoMGdXs6TYanRVzCRY7QYAmk5a9cnlVr-rJ8XrMcp_pfm8JALYjmv36xOlH6E_P6j75pU3Yir-Tgy8XdxMcAkn54otDbG-glS3OPwgh4ZHc0y_M'),
+      defaultModel: 'MiniMax-M2',
     );
 
     _toolRegistry.registerAll(createBuiltinTools(
@@ -49,14 +53,18 @@ class _BuddyAppState extends State<BuddyApp> {
     _audioManager = OnnxAudioManager();
     _audioManager!.onWakeWord = (word) {
       debugPrint('Wake word: $word');
-      _agent.enqueue(word);
+      // Wake word detected — start recording handled by manager
     };
-    _audioManager!.onTranscription = (text) {
-      debugPrint('Transcribed: $text');
-      _agent.enqueue(text);
+    _audioManager!.onRecording = (audioSamples) {
+      debugPrint('Recording ready: ${audioSamples.length} samples');
+      // Play back the recorded clip for confirmation
+      _audioPlayer.playRecordedClip(audioSamples);
     };
-    _audioManager!.onVadState = (speaking) {
-      // Could update UI or trigger TTS interruption here
+    _audioManager!.onSpeechStart = () {
+      debugPrint('Speech started');
+    };
+    _audioManager!.onSpeechEnd = () {
+      debugPrint('Speech ended');
     };
 
     final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';

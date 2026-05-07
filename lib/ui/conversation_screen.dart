@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:buddy_engine/buddy_engine.dart';
 import '../services/audio_device_service.dart';
 import '../services/audio_pipeline.dart';
+import '../services/audio_player_service.dart';
 import 'audio_settings_sheet.dart';
 import 'widgets/voice_activity_indicator.dart' show VoiceActivityIndicator;
 import 'widgets/live_waveform.dart' show LiveWaveform;
@@ -31,6 +33,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
+  final AudioPlayerService _audioPlayer = AudioPlayerService();
   bool _isProcessing = false;
 
   final AudioDeviceService _deviceService = AudioDeviceService();

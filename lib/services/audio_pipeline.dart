@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart';
 
 /// Audio pipeline state for UI display.
@@ -39,6 +41,7 @@ class AudioPipeline {
   KeywordSpotter? _spotter;
   OnlineRecognizer? _recognizer;
   OfflineTts? _tts;
+  AudioPlayer? _audioPlayer;
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
@@ -211,10 +214,34 @@ class AudioPipeline {
     if (_tts == null) return;
     _setState(AudioState.speaking);
     _isSpeaking = true;
+
     try {
       final audio = _tts!.generate(text: text);
-      debugPrint('TTS generated ${audio.samples.length} samples');
-    } finally {
+      final pcmData = audio.samples;
+      final sampleRate = audio.sampleRate;
+
+      // Convert Float32List PCM to 16-bit PCM bytes
+      final pcmBytes = Uint8List(pcmData.length * 2);
+      for (int i = 0; i < pcmData.length; i++) {
+        final sample = (pcmData[i] * 32767).clamp(-32768.0, 32767.0).toInt();
+        pcmBytes[i * 2] = sample & 0xFF;
+        pcmBytes[i * 2 + 1] = (sample >> 8) & 0xFF;
+      }
+
+      // Create a memory audio source from the PCM bytes
+      final audioSource = _MyPcmAudioSource(pcmBytes, sampleRate);
+
+      _audioPlayer ??= AudioPlayer();
+      _audioPlayer!.playbackEventStream.listen((event) {
+        if (event.processingState == ProcessingState.completed) {
+          _isSpeaking = false;
+          _setState(AudioState.idle);
+        }
+      });
+      _audioPlayer!.setAudioSource(audioSource);
+      _audioPlayer!.play();
+    } catch (e) {
+      debugPrint('TTS error: $e');
       _isSpeaking = false;
       _setState(AudioState.idle);
     }
@@ -226,6 +253,28 @@ class AudioPipeline {
     _vad?.free();
     _recognizer?.free();
     _tts?.free();
+    _audioPlayer?.dispose();
     _stateController.close();
+  }
+}
+
+/// Stream audio source that plays raw PCM s16le data.
+class _MyPcmAudioSource extends StreamAudioSource {
+  final Uint8List _pcmBytes;
+  final int _sampleRate;
+
+  _MyPcmAudioSource(this._pcmBytes, this._sampleRate);
+
+  @override
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    start ??= 0;
+    end ??= _pcmBytes.length;
+    return StreamAudioResponse(
+      sourceLength: _pcmBytes.length,
+      contentLength: end - start,
+      offset: start,
+      stream: Stream.value(_pcmBytes.sublist(start, end)),
+      contentType: 'audio/wav',
+    );
   }
 }
