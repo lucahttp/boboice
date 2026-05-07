@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   flutter_onnxruntime
+  speech_to_text_windows
   win32audio
 )
 

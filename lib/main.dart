@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:buddy_engine/buddy_engine.dart';
 import 'services/audio_player_service.dart';
 import 'services/onnx_audio_manager.dart';
+import 'services/windows_asr_service.dart';
 import 'ui/conversation_screen.dart';
 
 void main() { runApp(const BuddyApp()); }
@@ -19,6 +20,7 @@ class _BuddyAppState extends State<BuddyApp> {
   final ToolRegistry _toolRegistry = ToolRegistry();
   late final AbortSignal _abortSignal;
   final AudioPlayerService _audioPlayer = AudioPlayerService();
+  final WindowsAsrService _asr = WindowsAsrService();
   OnnxAudioManager? _audioManager;
 
   @override
@@ -50,21 +52,35 @@ class _BuddyAppState extends State<BuddyApp> {
   }
 
   Future<void> _initAudio() async {
+    // Initialize Windows ASR
+    _asr.onTranscription = (text) {
+      debugPrint('ASR transcription: $text');
+      _agent.enqueue(text);
+    };
+    _asr.onSpeechStart = () {
+      debugPrint('ASR started');
+    };
+    _asr.onSpeechEnd = () {
+      debugPrint('ASR ended');
+    };
+    await _asr.initialize();
+
     _audioManager = OnnxAudioManager();
-    _audioManager!.onWakeWord = (word) {
+    _audioManager!.onWakeWord = (word) async {
       debugPrint('Wake word: $word');
-      // Wake word detected — start recording handled by manager
+      // Start Windows ASR on wake word
+      await _asr.startListening();
     };
     _audioManager!.onRecording = (audioSamples) {
       debugPrint('Recording ready: ${audioSamples.length} samples');
-      // Play back the recorded clip for confirmation
       _audioPlayer.playRecordedClip(audioSamples);
     };
     _audioManager!.onSpeechStart = () {
-      debugPrint('Speech started');
+      debugPrint('Speech started (VAD)');
     };
-    _audioManager!.onSpeechEnd = () {
-      debugPrint('Speech ended');
+    _audioManager!.onSpeechEnd = () async {
+      debugPrint('Speech ended (VAD)');
+      await _asr.stopListening();
     };
 
     final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';
@@ -88,6 +104,7 @@ class _BuddyAppState extends State<BuddyApp> {
   void dispose() {
     _abortSignal.abort();
     _audioManager?.dispose();
+    _asr.dispose();
     super.dispose();
   }
 
