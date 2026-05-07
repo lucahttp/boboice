@@ -32,6 +32,7 @@ class MicCaptureService {
   Future<void> init({int deviceIndex = -1, int sampleRate = 16000}) async {
     await deinit();
     try {
+      debugPrint('[MIC] init called deviceIndex=$deviceIndex');
       await Recorder.instance.init(
         deviceID: deviceIndex,
         format: PCMFormat.s16le,
@@ -62,12 +63,14 @@ class MicCaptureService {
   /// Start capturing audio. Stream listener already set up in init().
   Future<void> start() async {
     if (_isCapturing) return;
+    debugPrint('[MIC] start called, isCapturing=$_isCapturing');
     try {
       Recorder.instance.start();
       Recorder.instance.startStreamingData();
       _isCapturing = true;
+      debugPrint('[MIC] started streaming');
     } catch (e) {
-      debugPrint('MicCapture start failed: $e');
+      debugPrint('[MIC] start failed: $e');
       _isCapturing = false;
       rethrow;
     }

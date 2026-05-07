@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'audio_pipeline.dart';
 import 'mic_capture_service.dart';
@@ -26,6 +27,7 @@ class OnnxAudioManager {
   void Function(String text)? onTranscription;
   void Function(String wakeWord)? onWakeWord;
   void Function(bool isSpeaking)? onVadState;
+  void Function(Float32List melFrames)? onMelSpectrogram;
 
   bool get isRunning => _running;
 
@@ -48,6 +50,9 @@ class OnnxAudioManager {
       _setState(AudioState.wakeWord);
       onWakeWord?.call(word);
     };
+    _onnxPipeline!.onMelSpectrogram = (frames) {
+      onMelSpectrogram?.call(frames);
+    };
 
     await _onnxPipeline!.initialize(
       melSpectrogramPath: melSpectrogramPath,
@@ -69,17 +74,22 @@ class OnnxAudioManager {
   Future<void> start() async {
     if (_running) return;
 
+    debugPrint('[AUDIO_MGR] start called');
     _mic = MicCaptureService();
     await _mic!.init();
+    debugPrint('[AUDIO_MGR] mic initialized');
 
     // Wire mic → ONNX pipeline
     _mic!.pcmStream.listen((samples) {
+      debugPrint('[AUDIO_MGR] PCM stream: ${samples.length} samples');
       if (!_running) return;
       _onnxPipeline?.processAudioChunk(samples);
     });
 
     await _mic!.start();
+    debugPrint('[AUDIO_MGR] mic started');
     _onnxPipeline?.start();
+    debugPrint('[AUDIO_MGR] pipeline started');
     _running = true;
   }
 
