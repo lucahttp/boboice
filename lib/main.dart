@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:buddy_engine/buddy_engine.dart';
 import 'services/audio_player_service.dart';
 import 'services/onnx_audio_manager.dart';
-import 'services/windows_asr_service.dart';
+import 'services/whisper_asr_service.dart';
 import 'ui/conversation_screen.dart';
 
 void main() { runApp(const BuddyApp()); }
@@ -19,13 +19,23 @@ class _BuddyAppState extends State<BuddyApp> {
   final Personality _personality = Personality();
   final ToolRegistry _toolRegistry = ToolRegistry();
   late final AbortSignal _abortSignal;
-  final AudioPlayerService _audioPlayer = AudioPlayerService();
-  final WindowsAsrService _asr = WindowsAsrService();
+  late final AudioPlayerService _audioPlayer;
+  final WhisperAsrService _whisper = WhisperAsrService();
   OnnxAudioManager? _audioManager;
+  bool _whisperReady = false;
+
+  AudioPlayerService _makeAudioPlayer() {
+    try {
+      return AudioPlayerService();
+    } catch (_) {
+      return NoopAudioPlayer();
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _audioPlayer = _makeAudioPlayer();
     _abortSignal = AbortSignal();
 
     // MiniMax LLM via OpenAI-compatible API
@@ -52,38 +62,40 @@ class _BuddyAppState extends State<BuddyApp> {
   }
 
   Future<void> _initAudio() async {
-    // Initialize Windows ASR
-    _asr.onTranscription = (text) {
-      debugPrint('ASR transcription: $text');
-      _agent.enqueue(text);
-    };
-    _asr.onSpeechStart = () {
-      debugPrint('ASR started');
-    };
-    _asr.onSpeechEnd = () {
-      debugPrint('ASR ended');
-    };
-    await _asr.initialize();
+    final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';
+
+    // Initialize Whisper ASR
+    try {
+      await _whisper.initialize(
+        encoderPath: '$modelsDir\\whisper\\encoder_model.onnx',
+        decoderPath: '$modelsDir\\whisper\\decoder_model.onnx',
+        tokenizerPath: '$modelsDir\\whisper\\tokenizer.json',
+      );
+      _whisperReady = true;
+    } catch (e) {
+      debugPrint('Whisper init failed: $e');
+    }
 
     _audioManager = OnnxAudioManager();
-    _audioManager!.onWakeWord = (word) async {
+    _audioManager!.onWakeWord = (word) {
       debugPrint('Wake word: $word');
-      // Start Windows ASR on wake word
-      await _asr.startListening();
     };
-    _audioManager!.onRecording = (audioSamples) {
+    _audioManager!.onRecording = (audioSamples) async {
       debugPrint('Recording ready: ${audioSamples.length} samples');
-      _audioPlayer.playRecordedClip(audioSamples);
+      if (_whisperReady) {
+        final text = await _whisper.transcribe(audioSamples);
+        if (text != null && text.isNotEmpty) {
+          debugPrint('Whisper ASR: $text');
+          _agent.enqueue(text);
+        }
+      }
     };
     _audioManager!.onSpeechStart = () {
       debugPrint('Speech started (VAD)');
     };
-    _audioManager!.onSpeechEnd = () async {
+    _audioManager!.onSpeechEnd = () {
       debugPrint('Speech ended (VAD)');
-      await _asr.stopListening();
     };
-
-    final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';
 
     try {
       await _audioManager!.initialize(
@@ -104,7 +116,7 @@ class _BuddyAppState extends State<BuddyApp> {
   void dispose() {
     _abortSignal.abort();
     _audioManager?.dispose();
-    _asr.dispose();
+    _whisper.dispose();
     super.dispose();
   }
 

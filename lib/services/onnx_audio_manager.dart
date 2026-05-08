@@ -79,9 +79,11 @@ class OnnxAudioManager {
       final isSpeaking = prob > 0.5;
       if (isSpeaking && !_lastSpeaking) {
         _lastSpeaking = true;
+        debugPrint('ONNX_PIPELINE onSpeechStart');
         onSpeechStart?.call();
       } else if (!isSpeaking && _lastSpeaking) {
         _lastSpeaking = false;
+        debugPrint('ONNX_PIPELINE onSpeechEnd');
         onSpeechEnd?.call();
         _dispatchRecording();
       }
@@ -99,14 +101,18 @@ class OnnxAudioManager {
       }
     };
     _onnxPipeline!.onWakeWord = (word) {
+      debugPrint('ONNX_PIPELINE onWakeWord fired: $word');
       _setState(AudioState.wakeWord);
-      // Reset ASR stream
-      _stream?.free();
-      _stream = _recognizer!.createStream();
+      // Reset ASR stream (Sherpa disabled, but guard anyway)
+      if (_recognizer != null && _stream != null) {
+        _stream!.free();
+        _stream = _recognizer!.createStream();
+      }
       _isRecordingForAsr = true;
       _lastSpeechTime = DateTime.now();
       _recording = true;
       _recordingBuffer = null;
+      debugPrint('ONNX_PIPELINE calling main onWakeWord callback');
       onWakeWord?.call(word);
     };
     _onnxPipeline!.onMelSpectrogram = (frames) {

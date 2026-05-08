@@ -231,7 +231,7 @@ class AudioPipeline {
       // Create a memory audio source from the PCM bytes
       final audioSource = _MyPcmAudioSource(pcmBytes, sampleRate);
 
-      _audioPlayer ??= AudioPlayer();
+      _audioPlayer ??= _createAudioPlayer();
       _audioPlayer!.playbackEventStream.listen((event) {
         if (event.processingState == ProcessingState.completed) {
           _isSpeaking = false;
@@ -241,9 +241,18 @@ class AudioPipeline {
       _audioPlayer!.setAudioSource(audioSource);
       _audioPlayer!.play();
     } catch (e) {
-      debugPrint('TTS error: $e');
+      // just_audio may not be available on Windows — silently ignore
       _isSpeaking = false;
       _setState(AudioState.idle);
+    }
+  }
+
+  AudioPlayer _createAudioPlayer() {
+    try {
+      return AudioPlayer();
+    } catch (e) {
+      // Return a stub that does nothing (will be caught by outer try/catch)
+      throw UnsupportedError('just_audio not available on this platform');
     }
   }
 

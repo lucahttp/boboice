@@ -191,7 +191,8 @@ class OnnxPipeline {
     // ── 3. Wake Word (check when buffer has enough) ────
     if (_embeddingBuffer.length >= _wakeWordFrames && !_wakeWordFiredThisCycle) {
       final wakeProb = await _runWakeWord(_embeddingBuffer);
-      if (wakeProb != null && wakeProb > 0.5) {
+      if (wakeProb != null && wakeProb > 0.3) {
+        debugPrint('[PIPELINE] WAKE WORD DETECTED! prob=$wakeProb');
         _wakeWordFiredThisCycle = true;
         _setState(AudioState.wakeWord);
         onWakeWord?.call('hey buddy');
@@ -292,6 +293,8 @@ class OnnxPipeline {
         }
       }
 
+      // Shape [16, 96] — the hey-buddy model expects [1, 16, 96] per spec
+      // but we pass [1, 16, 96] with all 16 embeddings
       final input = await OrtValue.fromList(inputData, [1, _wakeWordFrames, _embeddingDim]);
       final Map<String, OrtValue> outputs = await _wakeWordSession.run({'input': input});
       final OrtValue? output = outputs['output'];

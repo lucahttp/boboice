@@ -9,6 +9,10 @@ class WindowsAsrService {
   bool _isListening = false;
   bool _isInitialized = false;
 
+  WindowsAsrService() {
+    debugPrint('WindowsAsrService created');
+  }
+
   /// Called with transcribed text
   void Function(String text)? onTranscription;
 
@@ -23,9 +27,11 @@ class WindowsAsrService {
   /// Initialize Windows speech recognition.
   Future<void> initialize() async {
     if (_isInitialized) return;
+    debugPrint('STT initialize called');
     _isInitialized = true;
-    await _stt.initialize(
+    final success = await _stt.initialize(
       onStatus: (status) {
+        debugPrint('STT status: $status');
         if (status == 'done' || status == 'notListening') {
           if (_isListening) {
             _isListening = false;
@@ -39,34 +45,55 @@ class WindowsAsrService {
         onSpeechEnd?.call();
       },
     );
+    debugPrint('STT initialize done, success=$success');
   }
 
   /// Start listening for speech. Calls onTranscription for each recognized phrase.
   Future<void> startListening() async {
-    if (!_isInitialized) await initialize();
-    if (_isListening) return;
+    if (!_isInitialized) {
+      debugPrint('STT startListening: not initialized, calling initialize');
+      await initialize();
+    }
+    if (_isListening) {
+      debugPrint('STT startListening: already listening');
+      return;
+    }
 
     debugPrint('STT startListening called');
     _isListening = true;
     onSpeechStart?.call();
 
-    await _stt.listen(
-      onResult: (result) {
-        debugPrint('STT result: final=${result.finalResult} words="${result.recognizedWords}"');
-        if (result.finalResult) {
-          final text = result.recognizedWords.trim();
-          if (text.isNotEmpty) {
-            debugPrint('STT transcription: $text');
-            onTranscription?.call(text);
+    try {
+      await _stt.listen(
+        onResult: (result) {
+          try {
+            debugPrint('STT result: final=${result.finalResult} words="${result.recognizedWords}"');
+            // Guard against null recognizedWords (seen in some Windows plugin versions)
+            final words = result.recognizedWords;
+            if (words == null || words.isEmpty) return;
+            if (result.finalResult) {
+              final text = words.trim();
+              if (text.isNotEmpty) {
+                debugPrint('STT transcription: $text');
+                onTranscription?.call(text);
+              }
+            }
+          } catch (e) {
+            debugPrint('STT onResult error: $e');
           }
-        }
-      },
-      listenFor: const Duration(seconds: 30),
-      pauseFor: const Duration(seconds: 3),
-      partialResults: false,
-      cancelOnError: false,
-      listenMode: ListenMode.dictation,
-    );
+        },
+        listenFor: const Duration(seconds: 30),
+        pauseFor: const Duration(seconds: 3),
+        partialResults: false,
+        cancelOnError: false,
+        listenMode: ListenMode.dictation,
+      );
+      debugPrint('STT listen call returned');
+    } catch (e) {
+      debugPrint('STT listen exception: $e');
+      _isListening = false;
+      onSpeechEnd?.call();
+    }
   }
 
   /// Stop listening.

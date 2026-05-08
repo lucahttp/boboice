@@ -33,16 +33,25 @@ class _ConversationScreenState extends State<ConversationScreen> {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
-  final AudioPlayerService _audioPlayer = AudioPlayerService();
+  late final AudioPlayerService _audioPlayer;
   bool _isProcessing = false;
 
   final AudioDeviceService _deviceService = AudioDeviceService();
   AudioState _audioState = AudioState.idle;
   StreamSubscription? _audioStateSub;
 
+  AudioPlayerService _makeAudioPlayer() {
+    try {
+      return AudioPlayerService();
+    } catch (_) {
+      return NoopAudioPlayer();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _audioPlayer = _makeAudioPlayer();
     _messages.add(_ChatMessage(
       role: 'assistant',
       text: 'Hey buddy! What can I help you with?',

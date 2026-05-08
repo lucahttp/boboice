@@ -1,44 +1,60 @@
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
 /// Plays back a recorded audio clip (Float32List, 16kHz mono PCM).
 /// Converts to PCM WAV data and feeds to just_audio player.
 class AudioPlayerService {
-  final AudioPlayer _player = AudioPlayer();
+  AudioPlayer? _player;
   bool _isPlaying = false;
 
   bool get isPlaying => _isPlaying;
-  Stream<Duration> get positionStream => _player.positionStream;
-  Stream<Duration?> get durationStream => _player.durationStream;
+  Stream<Duration> get positionStream => _player?.positionStream ?? const Stream.empty();
+  Stream<Duration?> get durationStream => _player?.durationStream ?? const Stream.empty();
+
+  /// Lazily create the player to avoid MissingPluginException at startup.
+  AudioPlayer _getPlayer() {
+    _player ??= AudioPlayer();
+    return _player!;
+  }
 
   /// Load and play a Float32List audio buffer (16kHz mono).
   Future<void> playRecordedClip(Float32List samples, {int sampleRate = 16000}) async {
     try {
       await stop();
+    } catch (_) {}
 
+    try {
       // Convert Float32List [-1,1] to WAV bytes
       final wavBytes = _float32ToWav(samples, sampleRate: sampleRate);
 
       // Feed WAV bytes to just_audio via a custom stream source
       final source = _WavStreamSource(wavBytes);
 
-      await _player.setAudioSource(source);
-      _player.playerStateStream.listen((state) {
+      final player = _getPlayer();
+      await player.setAudioSource(source);
+      player.playerStateStream.listen((state) {
         _isPlaying = state.playing;
       });
-      await _player.play();
-    } catch (e) {
+      await player.play();
+    } catch (e, st) {
+      // just_audio may not have a Windows implementation — silently ignore
       _isPlaying = false;
     }
   }
 
   Future<void> stop() async {
-    await _player.stop();
+    try {
+      await _player?.stop();
+    } catch (_) {}
     _isPlaying = false;
   }
 
   void dispose() {
-    _player.dispose();
+    try {
+      _player?.dispose();
+    } catch (_) {}
+    _player = null;
   }
 
   /// Convert Float32List [-1,1] to 16-bit PCM WAV byte list.
@@ -101,4 +117,14 @@ class _WavStreamSource extends StreamAudioSource {
       contentType: 'audio/wav',
     );
   }
+}
+
+/// No-op audio player that does nothing, used when just_audio is unavailable.
+class NoopAudioPlayer extends AudioPlayerService {
+  @override
+  Future<void> playRecordedClip(Float32List samples, {int sampleRate = 16000}) async {}
+  @override
+  Future<void> stop() async {}
+  @override
+  void dispose() {}
 }
