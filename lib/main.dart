@@ -22,7 +22,6 @@ class _BuddyAppState extends State<BuddyApp> {
   late final AudioPlayerService _audioPlayer;
   final WhisperAsrService _whisper = WhisperAsrService();
   OnnxAudioManager? _audioManager;
-  bool _whisperReady = false;
 
   AudioPlayerService _makeAudioPlayer() {
     try {
@@ -71,7 +70,6 @@ class _BuddyAppState extends State<BuddyApp> {
         decoderPath: '$modelsDir\\whisper\\decoder_model.onnx',
         tokenizerPath: '$modelsDir\\whisper\\tokenizer.json',
       );
-      _whisperReady = true;
     } catch (e) {
       debugPrint('Whisper init failed: $e');
     }
@@ -82,7 +80,7 @@ class _BuddyAppState extends State<BuddyApp> {
     };
     _audioManager!.onRecording = (audioSamples) async {
       debugPrint('Recording ready: ${audioSamples.length} samples');
-      if (_whisperReady) {
+      if (_whisper.isReady) {
         final text = await _whisper.transcribe(audioSamples);
         if (text != null && text.isNotEmpty) {
           debugPrint('Whisper ASR: $text');
