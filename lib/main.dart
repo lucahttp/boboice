@@ -63,7 +63,7 @@ class _BuddyAppState extends State<BuddyApp> {
   Future<void> _initAudio() async {
     final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';
 
-    // Initialize Whisper ASR
+    // Initialize Whisper ASR with flutter_onnxruntime
     try {
       await _whisper.initialize(
         encoderPath: '$modelsDir\\whisper\\encoder_model.onnx',
