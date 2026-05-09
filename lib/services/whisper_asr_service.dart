@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'whisper_mel_service.dart';
 import 'whisper_tokenizer.dart';
@@ -137,9 +136,10 @@ int _argmaxLastTokenStatic(List<num> flat, int seqLen, int vocabSize) {
 /// Whisper ASR service using compute() for background transcription.
 class WhisperAsrService {
   /// Transcribe audio samples (Float32List, 16kHz mono).
-  /// Uses compute() to run ONNX inference off the main isolate.
+  /// Runs ONNX inference directly on this isolate (not the main thread).
+  /// Note: flutter_onnxruntime runs inference on a native thread pool,
+  /// so this doesn't block the Dart event loop.
   Future<String?> transcribe(Float32List audioSamples) async {
-    // Use compute() to run transcription in background
     final config = WhisperTranscribeConfig(
       audioSamples: audioSamples,
       encoderPath: _encoderPath!,
@@ -147,10 +147,13 @@ class WhisperAsrService {
       tokenizerPath: _tokenizerPath!,
     );
 
-    final result = await compute(_transcribeInIsolate, config);
+    // Run inference directly (not via compute()).
+    // flutter_onnxruntime executes ONNX ops on native thread pool,
+    // so Dart async operations (await) yield to the event loop.
+    final result = await _transcribeInIsolate(config);
 
     if (result.error != null) {
-      debugPrint('WhisperASR: ${result.error}');
+      print('WhisperASR: ${result.error}');
       return null;
     }
     return result.text;
@@ -176,7 +179,7 @@ class WhisperAsrService {
     _tokenizerPath = tokenizerPath;
 
     _initialized = true;
-    debugPrint('WhisperASR: initialized');
+    print('WhisperASR: initialized');
   }
 
   void dispose() {
