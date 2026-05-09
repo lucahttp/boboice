@@ -28,22 +28,28 @@ class WhisperTranscribeResult {
 /// Runs transcription in an isolate using compute().
 Future<WhisperTranscribeResult> _transcribeInIsolate(WhisperTranscribeConfig config) async {
   try {
+    print('WhisperASR: [1] Creating ONNX sessions...');
     // Initialize ONNX in this isolate
     final ort = OnnxRuntime();
     final encoderSession = await ort.createSession(config.encoderPath);
     final decoderSession = await ort.createSession(config.decoderPath);
+    print('WhisperASR: [2] ONNX sessions ready, loading tokenizer...');
 
     // Load tokenizer
     final tokenizer = WhisperTokenizer();
     await tokenizer.load(config.tokenizerPath);
+    print('WhisperASR: [3] Tokenizer loaded');
 
     // Mel service
     final melService = WhisperMelService();
 
     // 1. Compute mel spectrogram
+    print('WhisperASR: [4] Computing mel spectrogram...');
     final mel = melService.computeMel(config.audioSamples);
+    print('WhisperASR: [5] Mel computed: ${mel.length} frames');
 
     // 2. Run encoder
+    print('WhisperASR: [6] Running encoder...');
     final melInput = await OrtValue.fromList(mel, [1, WhisperMelService.nMels, WhisperMelService.maxFrames]);
     final encoderOutputs = await encoderSession.run({'input_features': melInput});
     final encoderHidden = encoderOutputs['last_hidden_state'];
@@ -51,16 +57,21 @@ Future<WhisperTranscribeResult> _transcribeInIsolate(WhisperTranscribeConfig con
     if (encoderHidden == null) {
       return WhisperTranscribeResult(error: 'Encoder returned null');
     }
+    print('WhisperASR: [7] Encoder done');
 
     // 3. Decoder loop
+    print('WhisperASR: [8] Running decoder loop...');
     final tokens = await _decodeLoopStatic(decoderSession, encoderHidden);
+    print('WhisperASR: [9] Decoder done, ${tokens.length} tokens');
 
     if (tokens.isEmpty) {
       return WhisperTranscribeResult(error: 'No tokens');
     }
 
     // 4. Decode tokens
+    print('WhisperASR: [10] Decoding tokens...');
     final text = tokenizer.decode(tokens);
+    print('WhisperASR: [11] Done: "$text"');
     return WhisperTranscribeResult(text: text);
   } catch (e) {
     return WhisperTranscribeResult(error: 'Transcription error: $e');
@@ -140,6 +151,7 @@ class WhisperAsrService {
   /// Note: flutter_onnxruntime runs inference on a native thread pool,
   /// so this doesn't block the Dart event loop.
   Future<String?> transcribe(Float32List audioSamples) async {
+    print('WhisperASR: transcribe() called, ${audioSamples.length} samples');
     final config = WhisperTranscribeConfig(
       audioSamples: audioSamples,
       encoderPath: _encoderPath!,
@@ -147,10 +159,12 @@ class WhisperAsrService {
       tokenizerPath: _tokenizerPath!,
     );
 
+    print('WhisperASR: starting inference...');
     // Run inference directly (not via compute()).
     // flutter_onnxruntime executes ONNX ops on native thread pool,
     // so Dart async operations (await) yield to the event loop.
     final result = await _transcribeInIsolate(config);
+    print('WhisperASR: inference done');
 
     if (result.error != null) {
       print('WhisperASR: ${result.error}');

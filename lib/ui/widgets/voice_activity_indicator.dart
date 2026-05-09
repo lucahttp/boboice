@@ -77,6 +77,8 @@ class _VoiceActivityIndicatorState extends State<VoiceActivityIndicator>
       case AudioState.wakeWord:
         _rippleController.forward().then((_) => _rippleController.reverse());
         _pulseController.repeat(reverse: true);
+      case AudioState.transcribing:
+        _spinController.repeat();
       case AudioState.processing:
         _spinController.repeat();
       case AudioState.speaking:
@@ -137,6 +139,7 @@ class _VoiceIndicatorPainter extends CustomPainter {
       AudioState.idle => const Color(0xFF9E9E9E),
       AudioState.listening => const Color(0xFF2196F3),
       AudioState.wakeWord => const Color(0xFF4CAF50),
+      AudioState.transcribing => const Color(0xFFFF5722),
       AudioState.processing => const Color(0xFFFF9800),
       AudioState.speaking => const Color(0xFF9C27B0),
     };
@@ -276,6 +279,7 @@ class VoiceStateLabel extends StatelessWidget {
       AudioState.idle => 'Ready',
       AudioState.listening => 'Listening...',
       AudioState.wakeWord => 'Wake word!',
+      AudioState.transcribing => 'Transcribing...',
       AudioState.processing => 'Processing...',
       AudioState.speaking => 'Speaking...',
     };
@@ -283,6 +287,7 @@ class VoiceStateLabel extends StatelessWidget {
       AudioState.idle => Colors.grey,
       AudioState.listening => const Color(0xFF2196F3),
       AudioState.wakeWord => const Color(0xFF4CAF50),
+      AudioState.transcribing => const Color(0xFFFF5722),
       AudioState.processing => const Color(0xFFFF9800),
       AudioState.speaking => const Color(0xFF9C27B0),
     };

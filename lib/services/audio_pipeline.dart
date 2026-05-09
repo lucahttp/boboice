@@ -11,6 +11,7 @@ enum AudioState {
   idle,
   listening,
   wakeWord,
+  transcribing,
   processing,
   speaking,
 }
