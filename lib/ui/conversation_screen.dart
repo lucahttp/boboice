@@ -9,6 +9,7 @@ import '../services/audio_player_service.dart';
 import 'audio_settings_sheet.dart';
 import 'widgets/voice_activity_indicator.dart' show VoiceActivityIndicator;
 import 'widgets/live_waveform.dart' show LiveWaveform;
+import 'widgets/mel_spectrogram_visualizer.dart' show MelSpectrogramVisualizer;
 
 /// Main conversation screen with chat messages, status streaming, and input.
 class ConversationScreen extends StatefulWidget {
@@ -16,6 +17,7 @@ class ConversationScreen extends StatefulWidget {
   final Personality personality;
   final Stream<AudioState>? audioStateStream;
   final Stream<double>? speechProbabilityStream;
+  final Stream<Float32List>? melSpectrogramStream;
 
   const ConversationScreen({
     super.key,
@@ -23,6 +25,7 @@ class ConversationScreen extends StatefulWidget {
     required this.personality,
     this.audioStateStream,
     this.speechProbabilityStream,
+    this.melSpectrogramStream,
   });
 
   @override
@@ -240,6 +243,15 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             : const Color(0xFF4CAF50),
                   );
                 },
+              ),
+            ),
+          // Mel spectrogram visualization
+          if (widget.melSpectrogramStream != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: MelSpectrogramVisualizer(
+                melStream: widget.melSpectrogramStream,
+                height: 48,
               ),
             ),
           Expanded(

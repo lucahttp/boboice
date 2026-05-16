@@ -2,8 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:buddy_engine/buddy_engine.dart';
 import 'services/audio_player_service.dart';
-import 'services/onnx_audio_manager.dart';
-import 'services/whisper_asr_service.dart';
+import 'services/buddy_audio_manager.dart';
 import 'ui/conversation_screen.dart';
 
 void main() { runApp(const BuddyApp()); }
@@ -20,8 +19,7 @@ class _BuddyAppState extends State<BuddyApp> {
   final ToolRegistry _toolRegistry = ToolRegistry();
   late final AbortSignal _abortSignal;
   late final AudioPlayerService _audioPlayer;
-  final WhisperAsrService _whisper = WhisperAsrService();
-  OnnxAudioManager? _audioManager;
+  BuddyAudioManager? _audioManager;
 
   AudioPlayerService _makeAudioPlayer() {
     try {
@@ -63,48 +61,30 @@ class _BuddyAppState extends State<BuddyApp> {
   Future<void> _initAudio() async {
     final modelsDir = '${Platform.environment['APPDATA']}\\Buddy\\models';
 
-    // Initialize Whisper ASR with flutter_onnxruntime
-    try {
-      await _whisper.initialize(
-        encoderPath: '$modelsDir\\whisper\\encoder_model.onnx',
-        decoderPath: '$modelsDir\\whisper\\decoder_model.onnx',
-        tokenizerPath: '$modelsDir\\whisper\\tokenizer.json',
-      );
-    } catch (e) {
-      debugPrint('Whisper init failed: $e');
-    }
-
-    _audioManager = OnnxAudioManager();
+    _audioManager = BuddyAudioManager();
+    
     _audioManager!.onWakeWord = (word) {
       debugPrint('Wake word: $word');
     };
-    _audioManager!.onRecording = (audioSamples) async {
-      debugPrint('Recording ready: ${audioSamples.length} samples');
-      if (_whisper.isReady) {
-        final text = await _whisper.transcribe(audioSamples);
-        if (text != null && text.isNotEmpty) {
-          debugPrint('Whisper ASR: $text');
-          _agent.enqueue(text);
-        }
-      }
-    };
-    _audioManager!.onSpeechStart = () {
-      debugPrint('Speech started (VAD)');
-    };
-    _audioManager!.onSpeechEnd = () {
-      debugPrint('Speech ended (VAD)');
+    
+    _audioManager!.onTranscription = (text) async {
+      debugPrint('Whisper ASR: $text');
+      _agent.enqueue(text);
     };
 
     try {
       await _audioManager!.initialize(
+        wakeWordPath: '$modelsDir\\hey-buddy.onnx',
+        asrTokensPath: '$modelsDir\\tokens.txt',
+        asrEncoderPath: '$modelsDir\\whisper\\encoder_model.onnx',
+        asrDecoderPath: '$modelsDir\\whisper\\decoder_model.onnx',
+        asrJoinerPath: '$modelsDir\\joiner.onnx',
         melSpectrogramPath: '$modelsDir\\mel-spectrogram.onnx',
         speechEmbeddingPath: '$modelsDir\\speech-embedding.onnx',
-        wakeWordPath: '$modelsDir\\hey-buddy.onnx',
         vadModelPath: '$modelsDir\\silero-vad.onnx',
-        asrModelPath: '$modelsDir\\encoder.onnx',
-        tokensPath: '$modelsDir\\tokens.txt',
       );
       await _audioManager!.start();
+      debugPrint('BuddyAudioManager started with ONNX pipeline');
     } catch (e) {
       debugPrint('Audio init failed: $e');
     }
@@ -114,7 +94,6 @@ class _BuddyAppState extends State<BuddyApp> {
   void dispose() {
     _abortSignal.abort();
     _audioManager?.dispose();
-    _whisper.dispose();
     super.dispose();
   }
 
@@ -129,7 +108,8 @@ class _BuddyAppState extends State<BuddyApp> {
         agent: _agent,
         personality: _personality,
         audioStateStream: _audioManager?.stateStream,
-        speechProbabilityStream: _audioManager?.speechProbabilityStream,
+        speechProbabilityStream: null,
+        melSpectrogramStream: _audioManager?.melSpectrogramStream,
       ),
     );
   }
