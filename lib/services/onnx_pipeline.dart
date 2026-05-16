@@ -30,12 +30,14 @@ class OnnxPipeline {
 
   // Embedding parameters (from hey-buddy JS)
   static const int _embeddingWindowSize = 76;  // frames per window
-  static const int _embeddingStride = 8;         // stride between windows
+  static const int _embeddingWindowStride = 8; // stride between windows
   static const int _melBins = 32;
   static const int _embeddingDim = 96;
   static const int _wakeWordFrames = 16;         // embeddings needed for wake word
 
-  // Embedding buffer (96-dim vectors)
+  // Embedding buffer (96-dim vectors) - FIXED SIZE sliding window like JS
+  // maxEmbeddings = wakeWordEmbeddingFrames / numFramesPerEmbedding = 16 / 4 = 4
+  static const int _maxEmbeddingBufferSize = 4;  // embeddings to fill 16 frames
   final List<Float32List> _embeddingBuffer = [];
 
   // VAD thresholds (from hey-buddy defaults)
@@ -133,7 +135,24 @@ class OnnxPipeline {
       // ── 1. Add to rolling buffer ───────────────────────────────────────────
       _audioBuffer.addAll(samples);
 
-      // ── 2. Run mel spectrogram when enough samples accumulated ────────────
+      // ── 2. Run VAD on last batch of audio (like JS batchInterval = 1920 samples = 120ms)
+      // This matches the JS code: lastBatch = audio.subarray(audio.length - batchIntervalSamples)
+      if (_audioBuffer.length >= 1920) {
+        final lastBatch = _audioBuffer.sublist(_audioBuffer.length - 1920);
+        final speechProb = await _runVad(lastBatch);
+        _isSpeaking = speechProb > _speechVadThreshold;
+        if (speechProb < _silenceVadThreshold) {
+          _silentFrames++;
+          if (_isSpeaking && _silentFrames > _negativeVadCount) {
+            _isSpeaking = false;
+          }
+        } else {
+          _silentFrames = 0;
+        }
+        onSpeechProbability?.call(speechProb);
+      }
+
+      // ── 3. Run mel spectrogram when enough samples accumulated ────────────
       while (_audioBuffer.length >= _melWindowSize) {
         final window = Float32List(_melWindowSize);
         for (int i = 0; i < _melWindowSize; i++) {
@@ -145,13 +164,19 @@ class OnnxPipeline {
         if (melFrames != null) {
           // Defer callback to avoid callback-after-delete crash
           final melCopy = Float32List.fromList(melFrames);
-          scheduleMicrotask(() => onMelSpectrogram?.call(melCopy));
+          Future.microtask(() => onMelSpectrogram?.call(melCopy));
 
-          // Compute speech embedding
-          final embedding = await _runSpeechEmbedding(melFrames);
-          if (embedding != null) {
-            _embeddingBuffer.add(embedding);
-            debugPrint('[PIPELINE] Embedding computed, buffer size: ${_embeddingBuffer.length}');
+          // Compute ALL embeddings using BATCHED inference (same as hey-buddy JS)
+          final embeddings = await _runSpeechEmbeddingBatch(melFrames);
+          if (embeddings != null) {
+            for (final emb in embeddings) {
+              _embeddingBuffer.add(emb);
+            }
+            // Trim buffer to max size (like JS: if length > maxEmbeddings, shift)
+            while (_embeddingBuffer.length > _maxEmbeddingBufferSize) {
+              _embeddingBuffer.removeAt(0);
+            }
+            debugPrint('[PIPELINE] Added ${embeddings.length} embeddings, buffer size: ${_embeddingBuffer.length}');
           }
         }
 
@@ -159,10 +184,25 @@ class OnnxPipeline {
         _audioBuffer.removeRange(0, _melAdvance);
       }
 
-      // ── 3. Wake Word (check when buffer has enough) ────
-      if (_embeddingBuffer.length >= _wakeWordFrames && !_wakeWordFiredThisCycle) {
-        final wakeProb = await _runWakeWord(_embeddingBuffer);
-        debugPrint('[PIPELINE] Wake word check: buffer=${_embeddingBuffer.length}, prob=$wakeProb');
+      // Restore proper default threshold (hey-buddy JS default is 0.5)
+      // ONLY check wake word when:
+      // 1. Buffer is full (4 embeddings = 16 frames like JS)
+      // 2. isSpeaking is true (VAD detected speech)
+      // 3. Wake word hasn't already fired this cycle
+      final isSpeaking = _embeddingBuffer.length >= _maxEmbeddingBufferSize && !_wakeWordFiredThisCycle;
+      
+      if (isSpeaking) {
+        // Build combined embedding [1, 16, 96] from buffer like JS embeddingBufferArrayToEmbedding
+        final combinedEmbedding = Float32List(_wakeWordFrames * _embeddingDim);
+        for (int i = 0; i < _embeddingBuffer.length; i++) {
+          for (int j = 0; j < _embeddingDim; j++) {
+            combinedEmbedding[i * _embeddingDim + j] = _embeddingBuffer[i][j];
+          }
+        }
+        
+        final wakeProb = await _runWakeWordFromCombined(combinedEmbedding);
+        debugPrint('[PIPELINE] Wake word check: buffer=${_embeddingBuffer.length}, prob=$wakeProb, speaking=$_isSpeaking');
+        
         if (wakeProb != null && wakeProb > 0.5) {
           debugPrint('[PIPELINE] WAKE WORD DETECTED! prob=$wakeProb');
           _wakeWordFiredThisCycle = true;
@@ -173,9 +213,6 @@ class OnnxPipeline {
           Future.delayed(const Duration(seconds: 2), () {
             _wakeWordFiredThisCycle = false;
           });
-        } else {
-          // Reset flag if probability drops
-          _wakeWordFiredThisCycle = false;
         }
       }
     } catch (e) {
@@ -194,8 +231,8 @@ class OnnxPipeline {
       if (output == null) return null;
 
       final flat = await output.asFlattenedList();
-      // Output shape: [1, 1, time, 32] → time is at index 2
       final timeDim = output.shape[2];
+      final melBins = output.shape[3];
       output.dispose();
 
       // Apply JS post-processing: datum / 10.0 + 2.0
@@ -211,61 +248,130 @@ class OnnxPipeline {
     }
   }
 
-  /// Run speech embedding: sliding window over mel frames → 96-dim embedding per window.
-  Future<Float32List?> _runSpeechEmbedding(Float32List melFrames) async {
+  /// Extract all embeddings via sliding window over mel frames.
+  Future<List<Float32List>?> _runSpeechEmbeddingBatch(Float32List melFrames) async {
     try {
       final numFrames = melFrames.length ~/ _melBins;
+      debugPrint('[PIPELINE] _runSpeechEmbeddingBatch: numFrames=$numFrames');
       if (numFrames < _embeddingWindowSize) return null;
 
-      // Take the first window of 76 frames - ONNX expects [batch, 76, 32, 1] = 4D
-      final window = Float32List(_embeddingWindowSize * _melBins);
-      for (int i = 0; i < _embeddingWindowSize * _melBins; i++) {
-        window[i] = melFrames[i];
+      // Calculate number of batches (same formula as JS)
+      final numTruncatedFrames = numFrames - (numFrames - _embeddingWindowSize) % _embeddingWindowStride;
+      final numBatches = (numTruncatedFrames - _embeddingWindowSize) ~/ _embeddingWindowStride + 1;
+      debugPrint('[PIPELINE] numBatches=$numBatches (numFrames=$numFrames, windowSize=$_embeddingWindowSize, stride=$_embeddingWindowStride)');
+
+      // Build batched input: [numBatches, 76, 32, 1]
+      final batchedInput = Float32List(numBatches * _embeddingWindowSize * _melBins);
+      int windowStart = 0;
+      int batchIdx = 0;
+      while (windowStart + _embeddingWindowSize <= numFrames && batchIdx < numBatches) {
+        for (int i = 0; i < _embeddingWindowSize * _melBins; i++) {
+          batchedInput[batchIdx * _embeddingWindowSize * _melBins + i] = 
+              melFrames[windowStart * _melBins + i];
+        }
+        windowStart += _embeddingWindowStride;
+        batchIdx++;
       }
 
-      final input = await OrtValue.fromList(window, [1, _embeddingWindowSize, _melBins, 1]);
+      final input = await OrtValue.fromList(batchedInput, [numBatches, _embeddingWindowSize, _melBins, 1]);
       final Map<String, OrtValue> outputs = await _embeddingSession.run({'input_1': input});
-      final OrtValue? output = outputs['output'];
+
+      for (final key in outputs.keys) {
+        debugPrint('[PIPELINE] Embedding output key: "$key", shape: ${outputs[key]!.shape}');
+      }
+
+      final OrtValue? output = outputs['output'] ?? outputs['output_1'] ?? outputs['conv2d_19'];
       input.dispose();
-      if (output == null) return null;
+      if (output == null) {
+        debugPrint('[PIPELINE] Embedding output is NULL - no output key found');
+        return null;
+      }
 
       final flat = await output.asFlattenedList();
+      debugPrint('[PIPELINE] Embedding output shape: ${output.shape}, flatLen=${flat.length}');
       output.dispose();
 
-      // Return 96-dim embedding
-      return Float32List.fromList(flat.take(_embeddingDim).cast<double>().toList());
+      // Output is [numBatches, 1, 1, 96] - extract each 96-dim embedding
+      final embeddings = <Float32List>[];
+      for (int i = 0; i < numBatches; i++) {
+        final startIdx = i * _embeddingDim;
+        final emb = Float32List.fromList(flat.sublist(startIdx, startIdx + _embeddingDim).cast<double>().toList());
+        embeddings.add(emb);
+      }
+      return embeddings;
     } catch (e) {
-      debugPrint('[PIPELINE] Speech embedding error: $e');
+      debugPrint('[PIPELINE] Speech embedding batch error: $e');
       return null;
     }
   }
 
-  /// Run wake word detection: 16 embeddings → single probability.
-  Future<double?> _runWakeWord(List<Float32List> embeddings) async {
+  /// Run wake word detection from pre-combined [1, 16, 96] tensor.
+  Future<double?> _runWakeWordFromCombined(Float32List combinedEmbedding) async {
     try {
-      if (embeddings.length < _wakeWordFrames) return null;
-
-      // Build input: [1, 16, 96]
-      final inputData = Float32List(_wakeWordFrames * _embeddingDim);
-      for (int i = 0; i < _wakeWordFrames; i++) {
-        for (int j = 0; j < _embeddingDim; j++) {
-          inputData[i * _embeddingDim + j] = embeddings[i][j];
-        }
-      }
-
-      final input = await OrtValue.fromList(inputData, [1, _wakeWordFrames, _embeddingDim]);
+      final input = await OrtValue.fromList(combinedEmbedding, [1, _wakeWordFrames, _embeddingDim]);
       final Map<String, OrtValue> outputs = await _wakeWordSession.run({'input': input});
       final OrtValue? output = outputs['output'];
       input.dispose();
       if (output == null) return null;
 
       final flat = await output.asFlattenedList();
+      debugPrint('[PIPELINE] Wake word output shape: ${output.shape}, values: ${flat.sublist(0, flat.length > 10 ? 10 : flat.length)}');
       output.dispose();
 
       return flat.isNotEmpty ? flat[0] : null;
     } catch (e) {
       debugPrint('[PIPELINE] Wake word error: $e');
       return null;
+    }
+  }
+
+  /// Run VAD on a small slice of audio (like JS batchInterval = 1920 samples = 120ms).
+  /// Returns speech probability (0-1).
+  Future<double> _runVad(List<double> audioSamples) async {
+    try {
+      final inputData = Float32List.fromList(audioSamples);
+      final input = await OrtValue.fromList(inputData, [1, audioSamples.length]);
+      // sr is scalar int64 - use Int64List for proper type
+      final srData = Int64List.fromList([_vadSampleRate]);
+      final sr = await OrtValue.fromList(srData, []);
+      final h = await OrtValue.fromList(_vadH, [2, 1, 64]);
+      final c = await OrtValue.fromList(_vadC, [2, 1, 64]);
+      
+      final outputs = await _vadSession.run({
+        'input': input,
+        'sr': sr,
+        'h': h,
+        'c': c,
+      });
+      input.dispose();
+      sr.dispose();
+      h.dispose();
+      c.dispose();
+      
+      final OrtValue? output = outputs['output'];
+      if (output == null) return 0.0;
+      
+      final prob = (await output.asFlattenedList())[0];
+      
+      // Update VAD state from 'hn' and 'cn' outputs if available
+      if (outputs.containsKey('hn')) {
+        final hn = await outputs['hn']!.asFlattenedList();
+        for (int i = 0; i < hn.length && i < _vadH.length; i++) {
+          _vadH[i] = hn[i];
+        }
+      }
+      if (outputs.containsKey('cn')) {
+        final cn = await outputs['cn']!.asFlattenedList();
+        for (int i = 0; i < cn.length && i < _vadC.length; i++) {
+          _vadC[i] = cn[i];
+        }
+      }
+      
+      output.dispose();
+      return prob.toDouble();
+    } catch (e) {
+      debugPrint('[PIPELINE] VAD error: $e');
+      return 0.0;
     }
   }
 
