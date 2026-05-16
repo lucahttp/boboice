@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:buddy_engine/buddy_engine.dart';
@@ -20,6 +21,7 @@ class _BuddyAppState extends State<BuddyApp> {
   late final AbortSignal _abortSignal;
   late final AudioPlayerService _audioPlayer;
   BuddyAudioManager? _audioManager;
+  final _recordingsController = StreamController<String>.broadcast();
 
   AudioPlayerService _makeAudioPlayer() {
     try {
@@ -66,10 +68,22 @@ class _BuddyAppState extends State<BuddyApp> {
     _audioManager!.onWakeWord = (word) {
       debugPrint('Wake word: $word');
     };
-    
+
     _audioManager!.onTranscription = (text) async {
       debugPrint('Whisper ASR: $text');
       _agent.enqueue(text);
+    };
+
+    _audioManager!.onAudioReady = (samples) async {
+      final outPath = '${Directory.current.path}\\recording_${DateTime.now().millisecondsSinceEpoch}.wav';
+      debugPrint('Audio recorded: ${samples.length} samples. Saving to $outPath...');
+      await _audioPlayer.savePcmToWav(samples, outPath);
+      debugPrint('Saved successfully. Sending to UI...');
+      _recordingsController.add(outPath);
+    };
+
+    _audioManager!.onAudioCaptured = (samples) {
+      // Optional: Real-time playback without latency can be hooked here
     };
 
     try {
@@ -93,6 +107,7 @@ class _BuddyAppState extends State<BuddyApp> {
   @override
   void dispose() {
     _abortSignal.abort();
+    _recordingsController.close();
     _audioManager?.dispose();
     super.dispose();
   }
@@ -110,6 +125,7 @@ class _BuddyAppState extends State<BuddyApp> {
         audioStateStream: _audioManager?.stateStream,
         speechProbabilityStream: null,
         melSpectrogramStream: _audioManager?.melSpectrogramStream,
+        recordedAudioStream: _recordingsController.stream,
       ),
     );
   }

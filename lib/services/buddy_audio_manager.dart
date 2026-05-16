@@ -18,10 +18,13 @@ class BuddyAudioManager {
 
   Function(String)? onWakeWord;
   Function(String)? onTranscription;
+  Function(List<int> samples)? onAudioReady; // fires when wake+silence captured
+  Function(List<int>)? onAudioCaptured; // fires on each chunk during capture
 
   bool _wakeWordDetected = false;
   List<double> _audioBuffer = [];
   List<int> _sampleBuffer = []; // Store original samples for ASR
+  final List<int> _preWakeWordBuffer = [];
   
   StreamSubscription? _micSub;
 
@@ -52,9 +55,23 @@ class BuddyAudioManager {
         if (!_wakeWordDetected) {
           _wakeWordDetected = true;
           _audioBuffer.clear();
+          
           _sampleBuffer.clear();
+          // Include the past ~1.08 seconds that contained the wake word
+          _sampleBuffer.addAll(_preWakeWordBuffer);
+          _preWakeWordBuffer.clear();
+          
           _stateController.add(AudioState.listening);
           onWakeWord?.call(phrase);
+        }
+      };
+
+      _pipeline!.onSpeechEnd = () {
+        if (_wakeWordDetected) {
+          debugPrint('[Audio] Speech ended via VAD, processing recording');
+          _wakeWordDetected = false;
+          _stateController.add(AudioState.processing);
+          _processRecordedAudio();
         }
       };
       
@@ -84,45 +101,35 @@ class BuddyAudioManager {
     // Feed raw PCM to ONNX pipeline for wake word detection
     _pipeline?.processAudioChunk(intSamples);
     
-    // Buffer audio after wake word
     if (_wakeWordDetected) {
       _sampleBuffer.addAll(intSamples);
-      
-      // Check for silence (energy-based fallback while ONNX processes)
-      double energy = 0.0;
-      for (var s in intSamples) {
-        final f = s / 32768.0;
-        energy += f * f;
-      }
-      energy /= intSamples.length;
-      final isSilent = energy < 0.0005;
-      
-      if (isSilent) {
-        // Enough silence - run ASR
-        _wakeWordDetected = false;
-        _stateController.add(AudioState.processing);
-        _runWhisperAsr();
-      }
+      onAudioCaptured?.call(intSamples);
       
       // Max 30 seconds
       if (_sampleBuffer.length > 16000 * 30) {
         debugPrint('[Audio] Max recording length reached');
         _wakeWordDetected = false;
-        _sampleBuffer.clear();
-        _stateController.add(AudioState.idle);
+        _stateController.add(AudioState.processing);
+        _processRecordedAudio();
+      }
+    } else {
+      // Keep a rolling buffer of ~1.08s (17280 samples)
+      _preWakeWordBuffer.addAll(intSamples);
+      if (_preWakeWordBuffer.length > 17280) {
+        _preWakeWordBuffer.removeRange(0, _preWakeWordBuffer.length - 17280);
       }
     }
   }
 
-  void _runWhisperAsr() {
+  void _processRecordedAudio() {
     if (_sampleBuffer.isEmpty) {
       _stateController.add(AudioState.idle);
       return;
     }
     
-    debugPrint('[Audio] Running Whisper ASR on ${_sampleBuffer.length} samples');
-    // TODO: Wire up Whisper ASR via flutter_onnxruntime
-    // For now, just reset state
+    debugPrint('[Audio] Audio ready with ${_sampleBuffer.length} samples');
+    onAudioReady?.call(List<int>.from(_sampleBuffer));
+    
     _sampleBuffer.clear();
     _stateController.add(AudioState.idle);
   }

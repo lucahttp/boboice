@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
@@ -16,6 +17,40 @@ class AudioPlayerService {
   AudioPlayer _getPlayer() {
     _player ??= AudioPlayer();
     return _player!;
+  }
+
+  /// Load and play int16 PCM samples.
+  Future<void> playPcmFromSamples(List<int> intSamples, {int sampleRate = 16000}) async {
+    final floatSamples = Float32List(intSamples.length);
+    for (int i = 0; i < intSamples.length; i++) {
+      floatSamples[i] = intSamples[i] / 32768.0;
+    }
+    await playRecordedClip(floatSamples, sampleRate: sampleRate);
+  }
+
+  /// Play audio from a file on disk.
+  Future<void> playFromFile(String path) async {
+    try {
+      await stop();
+      final player = _getPlayer();
+      await player.setFilePath(path);
+      player.playerStateStream.listen((state) {
+        _isPlaying = state.playing;
+      });
+      await player.play();
+    } catch (_) {
+      _isPlaying = false;
+    }
+  }
+
+  /// Save int16 PCM samples to a WAV file on disk.
+  Future<void> savePcmToWav(List<int> intSamples, String outputPath, {int sampleRate = 16000}) async {
+    final floatSamples = Float32List(intSamples.length);
+    for (int i = 0; i < intSamples.length; i++) {
+      floatSamples[i] = intSamples[i] / 32768.0;
+    }
+    final wavBytes = _float32ToWav(floatSamples, sampleRate: sampleRate);
+    await File(outputPath).writeAsBytes(wavBytes);
   }
 
   /// Load and play a Float32List audio buffer (16kHz mono).
@@ -71,22 +106,22 @@ class AudioPlayerService {
 
     // RIFF header
     buf.setUint32(o, 0x52494646); o += 4; // "RIFF"
-    buf.setUint32(o, fileSize); o += 4;
+    buf.setUint32(o, fileSize, Endian.little); o += 4;
     buf.setUint32(o, 0x57415645); o += 4; // "WAVE"
 
     // fmt subchunk
     buf.setUint32(o, 0x666D7420); o += 4; // "fmt "
-    buf.setUint32(o, 16); o += 4;          // subchunk1 size (PCM)
-    buf.setUint16(o, 1); o += 2;           // audio format (PCM)
-    buf.setUint16(o, numChannels); o += 2;
-    buf.setUint32(o, sampleRate); o += 4;
-    buf.setUint32(o, byteRate); o += 4;
-    buf.setUint16(o, blockAlign); o += 2;
-    buf.setUint16(o, bitsPerSample); o += 2;
+    buf.setUint32(o, 16, Endian.little); o += 4;          // subchunk1 size (PCM)
+    buf.setUint16(o, 1, Endian.little); o += 2;           // audio format (PCM)
+    buf.setUint16(o, numChannels, Endian.little); o += 2;
+    buf.setUint32(o, sampleRate, Endian.little); o += 4;
+    buf.setUint32(o, byteRate, Endian.little); o += 4;
+    buf.setUint16(o, blockAlign, Endian.little); o += 2;
+    buf.setUint16(o, bitsPerSample, Endian.little); o += 2;
 
     // data subchunk
     buf.setUint32(o, 0x64617461); o += 4; // "data"
-    buf.setUint32(o, dataSize); o += 4;
+    buf.setUint32(o, dataSize, Endian.little); o += 4;
 
     // PCM samples
     for (int i = 0; i < samples.length; i++) {
@@ -121,6 +156,12 @@ class _WavStreamSource extends StreamAudioSource {
 
 /// No-op audio player that does nothing, used when just_audio is unavailable.
 class NoopAudioPlayer extends AudioPlayerService {
+  @override
+  Future<void> playPcmFromSamples(List<int> intSamples, {int sampleRate = 16000}) async {}
+  @override
+  Future<void> savePcmToWav(List<int> intSamples, String outputPath, {int sampleRate = 16000}) async {}
+  @override
+  Future<void> playFromFile(String path) async {}
   @override
   Future<void> playRecordedClip(Float32List samples, {int sampleRate = 16000}) async {}
   @override

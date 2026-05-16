@@ -68,6 +68,12 @@ class OnnxPipeline {
   /// Called with VAD speech probability (0-1)
   void Function(double probability)? onSpeechProbability;
 
+  /// Called when VAD detects speech start
+  void Function()? onSpeechStart;
+
+  /// Called when VAD detects speech end
+  void Function()? onSpeechEnd;
+
   /// Called with mel spectrogram frames for display [numFrames, 32]
   void Function(Float32List melFrames)? onMelSpectrogram;
 
@@ -140,16 +146,28 @@ class OnnxPipeline {
       if (_audioBuffer.length >= 1920) {
         final lastBatch = _audioBuffer.sublist(_audioBuffer.length - 1920);
         final speechProb = await _runVad(lastBatch);
-        _isSpeaking = speechProb > _speechVadThreshold;
-        if (speechProb < _silenceVadThreshold) {
+        
+        bool justStartedSpeaking = false;
+        bool justStoppedSpeaking = false;
+        
+        if (speechProb > _speechVadThreshold && !_isSpeaking) {
+          _isSpeaking = true;
+          _silentFrames = 0;
+          justStartedSpeaking = true;
+        } else if (speechProb < _silenceVadThreshold && _isSpeaking) {
           _silentFrames++;
-          if (_isSpeaking && _silentFrames > _negativeVadCount) {
+          if (_silentFrames >= _negativeVadCount) {
             _isSpeaking = false;
+            justStoppedSpeaking = true;
           }
-        } else {
+        } else if (speechProb >= _silenceVadThreshold) {
+          // Reset silence counter if it's above silence threshold
           _silentFrames = 0;
         }
+        
         onSpeechProbability?.call(speechProb);
+        if (justStartedSpeaking) onSpeechStart?.call();
+        if (justStoppedSpeaking) onSpeechEnd?.call();
       }
 
       // ── 3. Run mel spectrogram when enough samples accumulated ────────────
@@ -189,9 +207,9 @@ class OnnxPipeline {
       // 1. Buffer is full (4 embeddings = 16 frames like JS)
       // 2. isSpeaking is true (VAD detected speech)
       // 3. Wake word hasn't already fired this cycle
-      final isSpeaking = _embeddingBuffer.length >= _maxEmbeddingBufferSize && !_wakeWordFiredThisCycle;
+      final shouldCheckWakeWord = _embeddingBuffer.length >= _maxEmbeddingBufferSize && !_wakeWordFiredThisCycle && _isSpeaking;
       
-      if (isSpeaking) {
+      if (shouldCheckWakeWord) {
         // Build combined embedding [1, 16, 96] from buffer like JS embeddingBufferArrayToEmbedding
         final combinedEmbedding = Float32List(_wakeWordFrames * _embeddingDim);
         for (int i = 0; i < _embeddingBuffer.length; i++) {

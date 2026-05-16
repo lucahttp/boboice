@@ -18,6 +18,7 @@ class ConversationScreen extends StatefulWidget {
   final Stream<AudioState>? audioStateStream;
   final Stream<double>? speechProbabilityStream;
   final Stream<Float32List>? melSpectrogramStream;
+  final Stream<String>? recordedAudioStream;
 
   const ConversationScreen({
     super.key,
@@ -26,6 +27,7 @@ class ConversationScreen extends StatefulWidget {
     this.audioStateStream,
     this.speechProbabilityStream,
     this.melSpectrogramStream,
+    this.recordedAudioStream,
   });
 
   @override
@@ -42,6 +44,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   final AudioDeviceService _deviceService = AudioDeviceService();
   AudioState _audioState = AudioState.idle;
   StreamSubscription? _audioStateSub;
+  StreamSubscription? _recordedAudioSub;
 
   AudioPlayerService _makeAudioPlayer() {
     try {
@@ -62,6 +65,22 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _audioStateSub = widget.audioStateStream?.listen((state) {
       if (mounted) setState(() => _audioState = state);
     });
+    _recordedAudioSub = widget.recordedAudioStream?.listen((path) {
+      if (mounted) {
+        setState(() {
+          _messages.add(_ChatMessage(role: 'audio', text: path));
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 100),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      }
+    });
   }
 
   @override
@@ -69,6 +88,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _inputController.dispose();
     _scrollController.dispose();
     _audioStateSub?.cancel();
+    _recordedAudioSub?.cancel();
     super.dispose();
   }
 
@@ -313,19 +333,51 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   Widget _buildMessageBubble(_ChatMessage msg, ThemeData theme) {
-    final alignment = msg.role == '"'"'user'"'"' ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-    final bgColor = msg.role == '"'"'user'"'"'
+    if (msg.role == 'audio') {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(color: theme.colorScheme.primaryContainer, borderRadius: BorderRadius.circular(18)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.mic, size: 20),
+                  const SizedBox(width: 8),
+                  const Text('Voice Recording'),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.play_arrow),
+                    tooltip: 'Play',
+                    onPressed: () {
+                      _audioPlayer.playFromFile(msg.text);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+      );
+    }
+
+    final alignment = msg.role == 'user' ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final bgColor = msg.role == 'user'
         ? theme.colorScheme.primaryContainer
-        : msg.role == '"'"'error'"'"'
+        : msg.role == 'error'
             ? theme.colorScheme.errorContainer
-            : msg.role == '"'"'tool_call'"'"' || msg.role == '"'"'tool_result'"'"'
+            : msg.role == 'tool_call' || msg.role == 'tool_result'
                 ? theme.colorScheme.surfaceContainerHighest
-                : msg.role == '"'"'reasoning'"'"'
+                : msg.role == 'reasoning'
                     ? theme.colorScheme.surfaceContainerLow
                     : theme.colorScheme.surfaceContainerLow;
-    final textStyle = msg.role == '"'"'reasoning'"'"'
+    final textStyle = msg.role == 'reasoning'
         ? theme.textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic)
-        : msg.role == '"'"'status'"'"'
+        : msg.role == 'status'
             ? theme.textTheme.bodySmall?.copyWith(color: Colors.grey)
             : theme.textTheme.bodyMedium;
 
