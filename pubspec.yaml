@@ -22,6 +22,7 @@ dependencies:
   win32audio: ^0.0.1
   flutter_recorder: ^1.1.4
   just_audio_windows: ^0.2.3
+  sherpa_onnx: ^1.13.2
 
 dev_dependencies:
   flutter_test:

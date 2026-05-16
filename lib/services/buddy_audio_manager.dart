@@ -5,10 +5,12 @@ import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'audio_pipeline.dart' show AudioState;
 import 'onnx_pipeline.dart';
 import 'mic_capture_service.dart';
+import 'sherpa_whisper_service.dart';
 
 class BuddyAudioManager {
   final MicCaptureService _mic = MicCaptureService();
   OnnxPipeline? _pipeline;
+  final SherpaWhisperService _asrService = SherpaWhisperService();
   final _melController = StreamController<Float32List>.broadcast();
   
   Stream<Float32List> get melSpectrogramStream => _melController.stream;
@@ -83,6 +85,12 @@ class BuddyAudioManager {
       );
       
       debugPrint('OnnxPipeline: Wake word model loaded.');
+
+      await _asrService.initialize(
+        encoderPath: asrEncoderPath,
+        decoderPath: asrDecoderPath,
+        tokensPath: asrTokensPath,
+      );
     } catch (e) {
       debugPrint('OnnxPipeline init error: $e');
     }
@@ -121,16 +129,26 @@ class BuddyAudioManager {
     }
   }
 
-  void _processRecordedAudio() {
+  Future<void> _processRecordedAudio() async {
     if (_sampleBuffer.isEmpty) {
       _stateController.add(AudioState.idle);
       return;
     }
     
     debugPrint('[Audio] Audio ready with ${_sampleBuffer.length} samples');
-    onAudioReady?.call(List<int>.from(_sampleBuffer));
+    final samplesCopy = List<int>.from(_sampleBuffer);
+    onAudioReady?.call(samplesCopy);
     
     _sampleBuffer.clear();
+    _stateController.add(AudioState.transcribing);
+
+    // Run Sherpa-ONNX Whisper on the buffer
+    final transcription = await _asrService.transcribe(samplesCopy);
+    if (transcription != null && transcription.isNotEmpty) {
+      debugPrint('[ASR] $transcription');
+      onTranscription?.call(transcription);
+    }
+
     _stateController.add(AudioState.idle);
   }
 
@@ -139,6 +157,7 @@ class BuddyAudioManager {
     _mic.dispose();
     _pipeline?.stop();
     _pipeline?.dispose();
+    _asrService.dispose();
     _melController.close();
     _stateController.close();
   }

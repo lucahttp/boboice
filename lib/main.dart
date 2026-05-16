@@ -89,9 +89,9 @@ class _BuddyAppState extends State<BuddyApp> {
     try {
       await _audioManager!.initialize(
         wakeWordPath: '$modelsDir\\hey-buddy.onnx',
-        asrTokensPath: '$modelsDir\\tokens.txt',
-        asrEncoderPath: '$modelsDir\\whisper\\encoder_model.onnx',
-        asrDecoderPath: '$modelsDir\\whisper\\decoder_model.onnx',
+        asrTokensPath: '$modelsDir\\sherpa-onnx-whisper-tiny.en\\tiny.en-tokens.txt',
+        asrEncoderPath: '$modelsDir\\sherpa-onnx-whisper-tiny.en\\tiny.en-encoder.int8.onnx',
+        asrDecoderPath: '$modelsDir\\sherpa-onnx-whisper-tiny.en\\tiny.en-decoder.int8.onnx',
         asrJoinerPath: '$modelsDir\\joiner.onnx',
         melSpectrogramPath: '$modelsDir\\mel-spectrogram.onnx',
         speechEmbeddingPath: '$modelsDir\\speech-embedding.onnx',
